@@ -1,174 +1,205 @@
 #!/usr/bin/env python3
 """
-Multi-Agent Dashboard Client — Python helper for emitting events.
+Multi-Agent Dashboard Client — Zero External Dependencies
 
-Usage from orchestration scripts:
+Sends events to the Dashboard server via HTTP POST (urllib).
+Auto-starts the server if not running.
 
+Usage:
     from dashboard_client import Dashboard
 
-    db = Dashboard()                   # auto-connects via HTTP to localhost:9121
-    db.workflow_start("myproject", "/path", "Build a REST API")
-    db.phase_start(1)
-    db.agent_spawn("explorer-1", "explorer", phase=1)
-    db.agent_tool_call("explorer-1", "read_file", file="src/main.py", iteration=3)
-    db.agent_complete("explorer-1", summary="Done", artifacts=["report.yaml"])
-    db.phase_complete(1)
+    db = Dashboard()                   # auto-connects to localhost:9121
+    db.ensure_server()                 # starts server if needed + opens browser
+    db.workflow_start("My Project")    # begin workflow
+    db.agent_spawn("explorer-1", "explorer", "discovery")
+    db.agent_tool_call("explorer-1", "read_file", "src/main.py")
+    db.agent_complete("explorer-1")
+    db.phase_complete("discovery")
     db.workflow_complete()
-
-Or use the ensure_server() helper to auto-start:
-
-    from dashboard_client import ensure_server
-    db = ensure_server()  # starts server if needed, opens browser
 """
 
 import json
-import time
 import os
+import platform
+import socket
 import subprocess
 import sys
-import urllib.request
-import urllib.error
+import time
+import webbrowser
+from pathlib import Path
+from urllib.request import Request, urlopen
+from urllib.error import URLError
 
 
 class Dashboard:
-    """Client for the Multi-Agent Dashboard server (single-port aiohttp)."""
+    """Client for the Multi-Agent Dashboard server (zero dependencies)."""
 
     def __init__(self, url="http://localhost:9121"):
-        """
-        url: Base URL of the dashboard server (HTTP + WS on same port).
-        """
         self.url = url.rstrip("/")
 
-    def _send(self, event):
-        event["timestamp"] = time.time()
-        data = json.dumps(event).encode("utf-8")
+    # ── Server Management ─────────────────────────────────────
+
+    def is_running(self) -> bool:
+        """Check if dashboard server is reachable."""
         try:
-            req = urllib.request.Request(
+            port = int(self.url.split(":")[-1].split("/")[0])
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(1)
+            sock.connect(("localhost", port))
+            sock.close()
+            return True
+        except (socket.error, OSError):
+            return False
+
+    def ensure_server(self, open_browser=True):
+        """Start dashboard server if not running, optionally open browser."""
+        if self.is_running():
+            if open_browser:
+                self._open_browser()
+            return
+
+        # Find server script relative to this file
+        server_script = Path(__file__).parent / "dashboard_server.py"
+        if not server_script.exists():
+            # Fallback: search common locations
+            candidates = [
+                Path.home() / ".hermes" / "skills" / "multi-agent-dev" / "scripts" / "dashboard_server.py",
+                Path.cwd() / "scripts" / "dashboard_server.py",
+            ]
+            for c in candidates:
+                if c.exists():
+                    server_script = c
+                    break
+
+        if not server_script.exists():
+            print(f"[Dashboard] ⚠️  Cannot find dashboard_server.py")
+            return
+
+        port = int(self.url.split(":")[-1].split("/")[0])
+
+        # Start server as background process
+        subprocess.Popen(
+            [sys.executable, str(server_script), "--port", str(port)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+
+        # Wait for server to be ready
+        for _ in range(30):
+            time.sleep(0.2)
+            if self.is_running():
+                break
+
+        if open_browser:
+            time.sleep(0.3)
+            self._open_browser()
+
+    def _open_browser(self):
+        """Open dashboard in default browser (cross-platform)."""
+        url = f"{self.url}/"
+        try:
+            webbrowser.open(url)
+        except Exception:
+            # Fallback for headless / special environments
+            system = platform.system()
+            try:
+                if system == "Darwin":
+                    subprocess.Popen(["open", url])
+                elif system == "Linux":
+                    # Check for WSL
+                    if "microsoft" in platform.uname().release.lower():
+                        subprocess.Popen(["wslview", url])
+                    else:
+                        subprocess.Popen(["xdg-open", url])
+                elif system == "Windows":
+                    os.startfile(url)
+            except Exception:
+                print(f"[Dashboard] Open {url} in browser")
+
+    # ── Event Sending ─────────────────────────────────────────
+
+    def send_event(self, event_type: str, data: dict = None):
+        """Send an event to the dashboard server."""
+        event = {
+            "type": event_type,
+            "data": data or {},
+            "timestamp": time.time(),
+        }
+        try:
+            body = json.dumps(event).encode("utf-8")
+            req = Request(
                 f"{self.url}/event",
-                data=data,
+                data=body,
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
-            urllib.request.urlopen(req, timeout=3)
-        except Exception:
-            # Fire-and-forget — don't crash the orchestrator if dashboard is down
-            pass
+            urlopen(req, timeout=3)
+        except (URLError, OSError):
+            pass  # Server might not be running — fail silently
 
-    # ── Workflow events ──────────────────────────────────────
-    def workflow_start(self, name="", path="", requirement=""):
-        self._send({
-            "type": "workflow.start",
-            "project": {"name": name, "path": path, "requirement": requirement},
+    # ── Convenience Methods ───────────────────────────────────
+
+    def workflow_start(self, name: str, project_path: str = ""):
+        self.send_event("workflow.start", {
+            "name": name,
+            "project_path": project_path,
         })
 
     def workflow_complete(self):
-        self._send({"type": "workflow.complete"})
+        self.send_event("workflow.complete")
 
-    def workflow_fail(self, error=""):
-        self._send({"type": "workflow.fail", "error": error})
+    def workflow_error(self, error: str):
+        self.send_event("workflow.error", {"error": error})
 
-    # ── Phase events ─────────────────────────────────────────
-    def phase_start(self, phase):
-        self._send({"type": "phase.start", "phase": phase})
+    def phase_start(self, phase: str):
+        self.send_event("phase.start", {"phase": phase})
 
-    def phase_complete(self, phase):
-        self._send({"type": "phase.complete", "phase": phase})
+    def phase_complete(self, phase: str):
+        self.send_event("phase.complete", {"phase": phase})
 
-    # ── Agent events ─────────────────────────────────────────
-    def agent_spawn(self, agent_id, role, phase=None, engine="delegate_task"):
-        self._send({
-            "type": "agent.spawn",
+    def phase_progress(self, phase: str, progress: int):
+        self.send_event("phase.progress", {"phase": phase, "progress": progress})
+
+    def agent_spawn(self, agent_id: str, role: str, phase: str, max_iterations: int = 50):
+        self.send_event("agent.spawn", {
             "agent_id": agent_id,
             "role": role,
             "phase": phase,
-            "engine": engine,
+            "max_iterations": max_iterations,
         })
 
-    def agent_tool_call(self, agent_id, tool, file=None, iteration=0):
-        self._send({
-            "type": "agent.tool_call",
+    def agent_tool_call(self, agent_id: str, tool: str, args: str = "", iteration: int = 0):
+        self.send_event("agent.tool_call", {
             "agent_id": agent_id,
             "tool": tool,
-            "file": file or "",
+            "args": args,
             "iteration": iteration,
         })
 
-    def agent_thinking(self, agent_id, text):
-        self._send({
-            "type": "agent.thinking",
+    def agent_thinking(self, agent_id: str):
+        self.send_event("agent.thinking", {"agent_id": agent_id})
+
+    def agent_complete(self, agent_id: str, result: str = "completed"):
+        self.send_event("agent.complete", {
             "agent_id": agent_id,
-            "text": text,
+            "result": result,
         })
 
-    def agent_complete(self, agent_id, summary="", artifacts=None):
-        self._send({
-            "type": "agent.complete",
-            "agent_id": agent_id,
-            "summary": summary,
-            "artifacts": artifacts or [],
-        })
-
-    def agent_fail(self, agent_id, error=""):
-        self._send({
-            "type": "agent.fail",
+    def agent_error(self, agent_id: str, error: str):
+        self.send_event("agent.error", {
             "agent_id": agent_id,
             "error": error,
         })
 
-    # ── Metrics ──────────────────────────────────────────────
-    def update_metrics(self, **kwargs):
-        self._send({
-            "type": "metrics.update",
-            "metrics": kwargs,
-        })
+    def metrics_update(self, **kwargs):
+        self.send_event("metrics.update", kwargs)
 
 
-# ── Convenience: start server if not running ─────────────────
-def ensure_server(port=9121):
-    """Start the dashboard server if not already running. Returns Dashboard client."""
-    import socket
-
-    url = f"http://localhost:{port}"
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        sock.connect(("localhost", port))
-        sock.close()
-        # Already running
-        return Dashboard(url=url)
-    except (ConnectionRefusedError, OSError):
-        pass
-
-    # Start server
-    server_script = os.path.join(os.path.dirname(__file__), "dashboard_server.py")
-    subprocess.Popen(
-        [sys.executable, server_script, "--port", str(port)],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    # Wait for it to start
-    for _ in range(30):
-        time.sleep(0.25)
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.connect(("localhost", port))
-            sock.close()
-            break
-        except (ConnectionRefusedError, OSError):
-            continue
-
-    # Open browser
-    try:
-        import webbrowser
-        webbrowser.open(f"http://localhost:{port}/")
-    except Exception:
-        pass
-
-    return Dashboard(url=url)
-
+# ── CLI Usage ─────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    # Quick test
-    db = ensure_server()
-    print("Dashboard client ready. Server running.")
-    print(f"Open http://localhost:9121/ in browser")
-    print("Press 'D' in the dashboard for a demo animation!")
+    db = Dashboard()
+    db.ensure_server()
+    print(f"Dashboard server running at {db.url}")
+    print(f"Open {db.url}/ in browser")

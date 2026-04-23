@@ -2,7 +2,7 @@
 name: multi-agent-dev
 description: Multi-Agent collaborative software development workflow. Orchestrates Explorer, Architect, Coder (Claude Code), Tester, and Reviewer agents in a phased pipeline — Discovery → Planning → Building → Verification — with confidence-scored reviews and evaluator-optimizer loops.
 version: 1.0.0
-author: Hermes Agent + hjw
+author: Hermes Agent
 license: MIT
 metadata:
   hermes:

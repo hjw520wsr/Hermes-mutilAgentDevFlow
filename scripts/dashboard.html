@@ -44,7 +44,7 @@
   .status-idle { background: var(--bg3); color: var(--dim); }
   .status-running { background: #1e3a5f; color: var(--accent); animation: pulse 2s infinite; }
   .status-completed { background: #1a3d2e; color: var(--green); }
-  .status-failed { background: #3d1a1a; color: var(--red); }
+  .status-failed, .status-error { background: #3d1a1a; color: var(--red); }
   @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:0.6;} }
   .topbar-right { display: flex; align-items: center; gap: 16px; color: var(--dim); font-size: 12px; }
   .timer { font-variant-numeric: tabular-nums; color: var(--accent); font-size: 14px; font-weight: 600; }
@@ -124,7 +124,7 @@
   .agent-status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
   .agent-status-dot.running { background: var(--accent); animation: pulse 1.5s infinite; }
   .agent-status-dot.completed { background: var(--green); }
-  .agent-status-dot.failed { background: var(--red); }
+  .agent-status-dot.failed, .agent-status-dot.error { background: var(--red); }
   .agent-status-dot.pending { background: var(--dim); }
   .agent-detail { font-size: 11px; color: var(--dim); margin-top: 4px; }
   .agent-tool { color: var(--cyan); }
@@ -294,6 +294,7 @@ const STATUS_COLORS = {
   running: '#60a5fa',
   completed: '#34d399',
   failed: '#f87171',
+  error: '#f87171',
 };
 
 const PHASE_COLORS = ['#a78bfa', '#fbbf24', '#34d399', '#f472b6'];
@@ -317,7 +318,7 @@ function connect() {
   ws.onmessage = (e) => {
     try {
       const msg = JSON.parse(e.data);
-      if (msg.type === 'state.full') {
+      if (msg.type === 'state') {
         state = msg.state;
         updateUI();
       }
@@ -339,27 +340,37 @@ function updateUI() {
   const badge = document.getElementById('statusBadge');
   badge.textContent = state.workflow.status.toUpperCase();
   badge.className = `status-badge status-${state.workflow.status}`;
-  document.getElementById('projectName').textContent = state.project.name || '';
+  document.getElementById('projectName').textContent = state.workflow.name || '';
 
-  if (state.workflow.elapsed > 0) {
-    const m = Math.floor(state.workflow.elapsed / 60);
-    const s = Math.floor(state.workflow.elapsed % 60);
+  if (state.metrics.elapsed > 0) {
+    const m = Math.floor(state.metrics.elapsed / 60);
+    const s = Math.floor(state.metrics.elapsed % 60);
     document.getElementById('timer').textContent = `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
   }
 
-  // Phase rows
+  // Phase rows — use current_phase_num (1-4) from enriched state
+  const currentPhaseNum = state.workflow.current_phase_num || 0;
+  const PHASE_KEYS = ['discovery', 'planning', 'building', 'verification'];
   document.querySelectorAll('.phase-row').forEach((row, i) => {
     const ph = i + 1;
+    const phKey = PHASE_KEYS[i];
+    const phaseData = state.phases[phKey] || {};
     row.className = 'phase-row';
-    if (ph < state.workflow.current_phase) row.classList.add('done');
-    else if (ph === state.workflow.current_phase) row.classList.add('active');
+    if (phaseData.status === 'completed') row.classList.add('done');
+    else if (phaseData.status === 'running') row.classList.add('active');
+    // Update progress bar width
+    const fill = row.querySelector('.phase-bar-fill');
+    if (fill) {
+      const pct = phaseData.status === 'completed' ? 100 : (phaseData.progress || 0);
+      fill.style.width = pct + '%';
+    }
   });
 
   // Metrics
-  document.getElementById('mAgents').textContent = state.metrics.total_agents_spawned;
-  document.getElementById('mTools').textContent = state.metrics.total_tool_calls;
-  document.getElementById('mTests').textContent = state.metrics.tests_passed;
-  document.getElementById('mIssues').textContent = state.metrics.issues_found;
+  document.getElementById('mAgents').textContent = state.metrics.agents_spawned;
+  document.getElementById('mTools').textContent = state.metrics.tool_calls;
+  document.getElementById('mTests').textContent = state.metrics.tests_passed || 0;
+  document.getElementById('mIssues').textContent = state.metrics.issues_found || 0;
 
   updateAgentList();
   updateEventLog();
@@ -371,17 +382,19 @@ function updateAgentList() {
   agents.sort((a, b) => {
     if (a.status === 'running' && b.status !== 'running') return -1;
     if (b.status === 'running' && a.status !== 'running') return 1;
-    return a.phase - b.phase;
+    return (a.phase_num || 0) - (b.phase_num || 0);
   });
 
   container.innerHTML = agents.map(a => {
     const rc = ROLE_CONFIG[a.role] || ROLE_CONFIG.unknown;
     const sc = STATUS_COLORS[a.status] || STATUS_COLORS.pending;
+    const elapsed = (a.elapsed || 0).toFixed(1);
     const detail = a.status === 'running'
       ? `<span class="agent-tool">${a.current_tool || 'initializing'}${a.current_file ? ' → ' + a.current_file.split('/').pop() : ''}</span> · iter ${a.iteration}`
-      : a.status === 'completed' ? `✅ ${a.elapsed.toFixed(1)}s · ${a.tool_calls} calls`
-      : a.status === 'failed' ? `❌ ${a.output_summary.substring(0, 40)}`
+      : a.status === 'completed' ? `✅ ${elapsed}s · ${a.tool_calls || 0} calls`
+      : a.status === 'error' || a.status === 'failed' ? `❌ ${(a.output_summary || '').substring(0, 40)}`
       : 'Waiting...';
+    const progress = a.progress_pct || 0;
     return `
       <div class="agent-card ${selectedAgent === a.id ? 'selected' : ''}" onclick="selectAgent('${a.id}')">
         <div class="agent-card-header">
@@ -389,7 +402,7 @@ function updateAgentList() {
           <span class="agent-status-dot ${a.status}"></span>
         </div>
         <div class="agent-detail">${detail}</div>
-        ${a.status === 'running' ? `<div class="agent-progress-bar"><div class="agent-progress-fill" style="width:${a.progress_pct}%; background:${sc}"></div></div>` : ''}
+        ${a.status === 'running' ? `<div class="agent-progress-bar"><div class="agent-progress-fill" style="width:${progress}%; background:${sc}"></div></div>` : ''}
       </div>`;
   }).join('');
 }
@@ -398,18 +411,22 @@ function updateEventLog() {
   const container = document.getElementById('eventLog');
   const events = (state.events || []).slice(-40).reverse();
   container.innerHTML = events.map(e => {
-    const t = new Date(e.timestamp * 1000);
+    const t = new Date((e.time || 0) * 1000);
     const time = `${String(t.getHours()).padStart(2,'0')}:${String(t.getMinutes()).padStart(2,'0')}:${String(t.getSeconds()).padStart(2,'0')}`;
-    const type = e.type.split('.')[1] || e.type;
+    const type = (e.type || '').split('.')[1] || e.type || '';
     let cls = '';
     if (type === 'spawn') cls = 'spawn';
     else if (type === 'tool_call') cls = 'tool';
     else if (type === 'complete') cls = 'complete';
-    else if (type === 'fail') cls = 'fail';
+    else if (type === 'fail' || type === 'error') cls = 'fail';
     else if (type === 'start') cls = 'phase';
-    const text = e.agent_id
-      ? `${(ROLE_CONFIG[e.role]||ROLE_CONFIG.unknown).icon} ${e.agent_id} ${e.tool||e.summary||''}`
-      : e.phase ? `Phase ${e.phase}` : '';
+    const data = e.data || {};
+    const agentId = data.agent_id || '';
+    const agentRole = agentId && state.agents[agentId] ? state.agents[agentId].role : '';
+    const rc = ROLE_CONFIG[agentRole] || ROLE_CONFIG.unknown;
+    const text = agentId
+      ? `${rc.icon} ${agentId} ${data.tool || data.summary || ''}`
+      : data.phase ? `Phase: ${data.phase}` : '';
     return `<div class="event-line"><span class="etime">${time}</span><span class="etype ${cls}">${type}</span>${text}</div>`;
   }).join('');
 }
@@ -422,10 +439,11 @@ function selectAgent(id) {
   const rc = ROLE_CONFIG[a.role] || ROLE_CONFIG.unknown;
   document.getElementById('modalTitle').textContent = `${rc.icon} ${rc.label} — ${a.id}`;
   document.getElementById('modalStats').innerHTML = `
-    <div class="modal-stat"><div class="modal-stat-val">${a.tool_calls}</div><div class="modal-stat-label">Tool Calls</div></div>
+    <div class="modal-stat"><div class="modal-stat-val">${a.tool_calls || 0}</div><div class="modal-stat-label">Tool Calls</div></div>
     <div class="modal-stat"><div class="modal-stat-val">${a.iteration}</div><div class="modal-stat-label">Iterations</div></div>
-    <div class="modal-stat"><div class="modal-stat-val">${a.elapsed.toFixed(1)}s</div><div class="modal-stat-label">Elapsed</div></div>`;
-  document.getElementById('modalLog').textContent = a.log.join('\n') || 'No activity yet';
+    <div class="modal-stat"><div class="modal-stat-val">${(a.elapsed || 0).toFixed(1)}s</div><div class="modal-stat-label">Elapsed</div></div>`;
+  const activities = (a.activities || []).map(act => `[${new Date(act.time*1000).toLocaleTimeString()}] ${act.tool} ${act.args || ''}`);
+  document.getElementById('modalLog').textContent = activities.join('\n') || 'No activity yet';
   document.getElementById('modalOverlay').classList.add('show');
   updateAgentList();
 }
@@ -510,10 +528,10 @@ function getColumnLayout(w, h) {
   const nodeR = 28;
   const nodeGapY = 90; // min vertical gap between node centers
 
-  // Group by phase
+  // Group by phase (using phase_num from enriched state)
   const phaseGroups = { 1: [], 2: [], 3: [], 4: [] };
   agents.forEach(a => {
-    const p = a.phase || 1;
+    const p = a.phase_num || 1;
     if (phaseGroups[p]) phaseGroups[p].push(a);
     else phaseGroups[1].push(a);
   });
@@ -531,8 +549,8 @@ function getColumnLayout(w, h) {
       color: PHASE_COLORS[phase - 1],
       name: PHASE_NAMES[phase - 1],
       count: n,
-      active: state.workflow.current_phase === phase,
-      done: state.workflow.current_phase > phase,
+      active: (state.workflow.current_phase_num || 0) === phase,
+      done: (state.workflow.current_phase_num || 0) > phase,
     });
 
     if (n === 0) continue;
@@ -780,7 +798,7 @@ function drawNode(node) {
     ctx.fillStyle = '#34d399';
     ctx.textBaseline = 'middle';
     ctx.fillText('✓', node.x + r * 0.7, node.y - r * 0.7);
-  } else if (node.status === 'failed') {
+  } else if (node.status === 'failed' || node.status === 'error') {
     ctx.beginPath();
     ctx.arc(node.x + r * 0.7, node.y - r * 0.7, 8, 0, Math.PI * 2);
     ctx.fillStyle = '#7f1d1d';
@@ -872,9 +890,9 @@ render();
 
 // ── Timer ──
 setInterval(() => {
-  if (state && state.workflow.status === 'running' && state.workflow.started_at) {
-    state.workflow.elapsed = Date.now()/1000 - state.workflow.started_at;
-    const m = Math.floor(state.workflow.elapsed/60), s = Math.floor(state.workflow.elapsed%60);
+  if (state && state.workflow.status === 'running' && state.metrics.start_time) {
+    const elapsed = Date.now()/1000 - state.metrics.start_time;
+    const m = Math.floor(elapsed/60), s = Math.floor(elapsed%60);
     document.getElementById('timer').textContent = `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
   }
 }, 1000);
@@ -908,6 +926,7 @@ async function runDemo() {
       const files = ['src/', 'package.json', 'requirements.txt', 'docker-compose.yaml'];
       send({ type: 'agent.tool_call', agent_id: id, tool: tools[i%4], file: files[(i+explorers.indexOf(id))%4], iteration: i+1 });
     }
+    send({ type: 'phase.progress', phase: 1, progress: Math.min(90, Math.round((i+1)/6*90)) });
     await delay(400);
   }
   for (const id of explorers) {
@@ -931,6 +950,7 @@ async function runDemo() {
     for (const id of planners) {
       send({ type: 'agent.tool_call', agent_id: id, tool: tools[i%3], file: files[(i+planners.indexOf(id))%3], iteration: i+1 });
     }
+    send({ type: 'phase.progress', phase: 2, progress: Math.min(90, Math.round((i+1)/8*90)) });
     await delay(450);
   }
   for (const id of planners) {
@@ -959,15 +979,16 @@ async function runDemo() {
     for (const id of coders) {
       send({ type: 'agent.tool_call', agent_id: id, tool: tools[i%4], file: fileMap[id][i%4], iteration: i+1 });
     }
+    send({ type: 'phase.progress', phase: 3, progress: Math.min(90, Math.round((i+1)/14*90)) });
     await delay(280);
   }
-  send({ type: 'metrics.update', metrics: { files_created: 16, files_modified: 8 }});
+  send({ type: 'metrics.update', files_created: 16, files_modified: 8 });
   for (const id of coders) {
     send({ type: 'agent.complete', agent_id: id, summary: 'Implementation complete' });
     await delay(120);
   }
   send({ type: 'phase.complete', phase: 3 });
-  send({ type: 'metrics.update', metrics: { tests_passed: 22, files_created: 18 }});
+  send({ type: 'metrics.update', tests_passed: 22, files_created: 18 });
   await delay(600);
 
   // ── Phase 4: Verification (1 tester + 3 reviewers) ──
@@ -984,10 +1005,11 @@ async function runDemo() {
     for (const id of reviewers) {
       send({ type: 'agent.tool_call', agent_id: id, tool: ['read_file', 'search_files'][i%2], file: ['routes.py', 'auth.py', 'models.py'][i%3], iteration: i+1 });
     }
+    send({ type: 'phase.progress', phase: 4, progress: Math.min(90, Math.round((i+1)/10*90)) });
     await delay(350);
   }
   send({ type: 'agent.complete', agent_id: 'tester-main', summary: '28 tests passed, 2 failed' });
-  send({ type: 'metrics.update', metrics: { tests_passed: 28, issues_found: 7 }});
+  send({ type: 'metrics.update', tests_passed: 28, issues_found: 7 });
   for (const id of reviewers) {
     await delay(200);
     send({ type: 'agent.complete', agent_id: id, summary: `Found ${Math.floor(Math.random()*3)+1} high-confidence issues` });
