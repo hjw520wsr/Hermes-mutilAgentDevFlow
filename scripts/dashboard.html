@@ -1,0 +1,1002 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🧠 Multi-Agent Dashboard</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap');
+
+  :root {
+    --bg: #0a0e17; --bg2: #111827; --bg3: #1e293b;
+    --border: #2a3a55; --text: #e2e8f0; --dim: #64748b;
+    --accent: #60a5fa; --green: #34d399; --red: #f87171;
+    --yellow: #fbbf24; --purple: #a78bfa; --cyan: #22d3ee;
+    --pink: #f472b6; --orange: #fb923c;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'JetBrains Mono', monospace;
+    background: var(--bg);
+    color: var(--text);
+    overflow: hidden;
+    height: 100vh;
+  }
+
+  /* ── Top Bar ────────────────────────── */
+  .topbar {
+    height: 44px;
+    background: var(--bg2);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 20px;
+  }
+  .topbar-left { display: flex; align-items: center; gap: 16px; }
+  .topbar-logo { font-size: 14px; font-weight: 700; }
+  .topbar-logo span { color: var(--accent); }
+  .status-badge {
+    font-size: 10px; font-weight: 700; padding: 2px 10px;
+    border-radius: 10px; letter-spacing: 1px;
+  }
+  .status-idle { background: var(--bg3); color: var(--dim); }
+  .status-running { background: #1e3a5f; color: var(--accent); animation: pulse 2s infinite; }
+  .status-completed { background: #1a3d2e; color: var(--green); }
+  .status-failed { background: #3d1a1a; color: var(--red); }
+  @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:0.6;} }
+  .topbar-right { display: flex; align-items: center; gap: 16px; color: var(--dim); font-size: 12px; }
+  .timer { font-variant-numeric: tabular-nums; color: var(--accent); font-size: 14px; font-weight: 600; }
+
+  /* ── Main Layout ────────────────────── */
+  .main {
+    display: grid;
+    grid-template-columns: 1fr 300px;
+    height: calc(100vh - 44px);
+  }
+
+  /* ── Canvas Area ────────────────────── */
+  .canvas-area { position: relative; overflow: hidden; }
+  #agentCanvas { width: 100%; height: 100%; }
+
+  /* ── Right Panel ────────────────────── */
+  .right-panel {
+    background: var(--bg2);
+    border-left: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .panel-section {
+    border-bottom: 1px solid var(--border);
+    padding: 12px 16px;
+  }
+  .panel-title {
+    font-size: 11px; text-transform: uppercase;
+    letter-spacing: 1px; color: var(--dim); margin-bottom: 8px;
+  }
+
+  /* Phase Progress */
+  .phases { display: flex; flex-direction: column; gap: 4px; }
+  .phase-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 4px 8px; border-radius: 6px;
+    font-size: 11px; font-weight: 600;
+    background: var(--bg3); color: var(--dim);
+    transition: all 0.3s;
+  }
+  .phase-row.active { background: #1e3a5f; color: var(--accent); }
+  .phase-row.done { background: #1a3d2e; color: var(--green); }
+  .phase-num {
+    width: 18px; height: 18px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 10px; background: rgba(255,255,255,0.1);
+  }
+  .phase-bar {
+    flex: 1; height: 3px; background: rgba(255,255,255,0.1);
+    border-radius: 2px; overflow: hidden;
+  }
+  .phase-bar-fill { height: 100%; border-radius: 2px; transition: width 0.5s; }
+  .phase-row.active .phase-bar-fill { background: var(--accent); animation: progress-anim 3s linear infinite; }
+  .phase-row.done .phase-bar-fill { background: var(--green); width: 100% !important; }
+  @keyframes progress-anim { from{width:0%} to{width:100%} }
+
+  /* Metrics Grid */
+  .metrics-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .metric { background: var(--bg3); border-radius: 6px; padding: 8px 10px; }
+  .metric-value { font-size: 20px; font-weight: 700; color: var(--accent); }
+  .metric-label { font-size: 10px; color: var(--dim); margin-top: 2px; }
+
+  /* Agent List */
+  .agent-list-container { flex: 1; overflow-y: auto; padding: 8px 16px; min-height: 0; }
+  .agent-list-container::-webkit-scrollbar { width: 4px; }
+  .agent-list-container::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  .agent-card {
+    background: var(--bg3); border-radius: 8px;
+    padding: 10px 12px; margin-bottom: 6px;
+    border: 1px solid transparent; cursor: pointer; transition: all 0.2s;
+  }
+  .agent-card:hover { border-color: var(--border); }
+  .agent-card.selected { border-color: var(--accent); background: #1e293b; }
+  .agent-card-header { display: flex; align-items: center; justify-content: space-between; }
+  .agent-role { font-weight: 600; font-size: 12px; }
+  .agent-status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  .agent-status-dot.running { background: var(--accent); animation: pulse 1.5s infinite; }
+  .agent-status-dot.completed { background: var(--green); }
+  .agent-status-dot.failed { background: var(--red); }
+  .agent-status-dot.pending { background: var(--dim); }
+  .agent-detail { font-size: 11px; color: var(--dim); margin-top: 4px; }
+  .agent-tool { color: var(--cyan); }
+  .agent-progress-bar { height: 3px; background: var(--bg); border-radius: 2px; margin-top: 6px; overflow: hidden; }
+  .agent-progress-fill { height: 100%; border-radius: 2px; transition: width 0.5s ease; }
+
+  /* Event Log */
+  .event-log-section { border-top: 1px solid var(--border); }
+  .event-log {
+    height: 160px; overflow-y: auto;
+    padding: 4px 16px; font-size: 11px;
+  }
+  .event-log::-webkit-scrollbar { width: 4px; }
+  .event-log::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  .event-line { padding: 2px 0; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .event-line .etime { color: var(--dim); margin-right: 6px; }
+  .event-line .etype { font-weight: 600; margin-right: 6px; }
+  .event-line .etype.spawn { color: var(--purple); }
+  .event-line .etype.tool { color: var(--cyan); }
+  .event-line .etype.complete { color: var(--green); }
+  .event-line .etype.fail { color: var(--red); }
+  .event-line .etype.phase { color: var(--yellow); }
+
+  /* ── Modal ────────────────────────── */
+  .modal-overlay {
+    display: none; position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.6); z-index: 100;
+    backdrop-filter: blur(4px);
+  }
+  .modal-overlay.show { display: flex; align-items: center; justify-content: center; }
+  .modal {
+    background: var(--bg2); border: 1px solid var(--border);
+    border-radius: 12px; width: 600px; max-height: 80vh;
+    overflow: hidden; display: flex; flex-direction: column;
+  }
+  .modal-header {
+    padding: 16px 20px; border-bottom: 1px solid var(--border);
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .modal-header h3 { font-size: 16px; }
+  .modal-close { cursor: pointer; color: var(--dim); font-size: 20px; }
+  .modal-close:hover { color: var(--text); }
+  .modal-body { padding: 16px 20px; overflow-y: auto; flex: 1; }
+  .modal-log {
+    background: var(--bg); border-radius: 6px; padding: 12px;
+    font-size: 11px; line-height: 1.6; max-height: 300px;
+    overflow-y: auto; white-space: pre-wrap; color: var(--dim);
+  }
+  .modal-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 12px; }
+  .modal-stat { background: var(--bg3); border-radius: 6px; padding: 8px; text-align: center; }
+  .modal-stat-val { font-size: 18px; font-weight: 700; color: var(--accent); }
+  .modal-stat-label { font-size: 10px; color: var(--dim); }
+
+  .conn-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 4px; }
+  .conn-dot.connected { background: var(--green); }
+  .conn-dot.disconnected { background: var(--red); animation: pulse 1s infinite; }
+
+  /* ── Help overlay ────────────────── */
+  .help-hint {
+    position: absolute; bottom: 12px; left: 12px;
+    font-size: 10px; color: var(--dim); opacity: 0.6;
+  }
+</style>
+</head>
+<body>
+
+<!-- Top Bar -->
+<div class="topbar">
+  <div class="topbar-left">
+    <div class="topbar-logo">🧠 <span>Multi-Agent</span> Dashboard</div>
+    <span id="statusBadge" class="status-badge status-idle">IDLE</span>
+    <span id="projectName" style="color:var(--dim); font-size: 12px;"></span>
+  </div>
+  <div class="topbar-right">
+    <span><span id="connDot" class="conn-dot disconnected"></span><span id="connText">Disconnected</span></span>
+    <span class="timer" id="timer">00:00</span>
+  </div>
+</div>
+
+<!-- Main Layout -->
+<div class="main">
+  <div class="canvas-area">
+    <canvas id="agentCanvas"></canvas>
+    <div class="help-hint">Press D for demo</div>
+  </div>
+
+  <div class="right-panel">
+    <div class="panel-section">
+      <div class="panel-title">Workflow Phases</div>
+      <div class="phases" id="phases">
+        <div class="phase-row" data-phase="1"><span class="phase-num">1</span>Discovery<span class="phase-bar"><span class="phase-bar-fill"></span></span></div>
+        <div class="phase-row" data-phase="2"><span class="phase-num">2</span>Planning<span class="phase-bar"><span class="phase-bar-fill"></span></span></div>
+        <div class="phase-row" data-phase="3"><span class="phase-num">3</span>Building<span class="phase-bar"><span class="phase-bar-fill"></span></span></div>
+        <div class="phase-row" data-phase="4"><span class="phase-num">4</span>Verification<span class="phase-bar"><span class="phase-bar-fill"></span></span></div>
+      </div>
+    </div>
+
+    <div class="panel-section">
+      <div class="panel-title">Metrics</div>
+      <div class="metrics-grid">
+        <div class="metric"><div class="metric-value" id="mAgents">0</div><div class="metric-label">Agents Spawned</div></div>
+        <div class="metric"><div class="metric-value" id="mTools">0</div><div class="metric-label">Tool Calls</div></div>
+        <div class="metric"><div class="metric-value" id="mTests">0</div><div class="metric-label">Tests Passed</div></div>
+        <div class="metric"><div class="metric-value" id="mIssues">0</div><div class="metric-label">Issues Found</div></div>
+      </div>
+    </div>
+
+    <div class="panel-section" style="padding-bottom: 4px;">
+      <div class="panel-title">Active Agents</div>
+    </div>
+    <div class="agent-list-container" id="agentList"></div>
+
+    <div class="event-log-section">
+      <div class="panel-section" style="padding-bottom: 4px;">
+        <div class="panel-title">Event Log</div>
+      </div>
+      <div class="event-log" id="eventLog"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Agent Detail Modal -->
+<div class="modal-overlay" id="modalOverlay">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="modalTitle">Agent Detail</h3>
+      <span class="modal-close" id="modalClose">✕</span>
+    </div>
+    <div class="modal-body">
+      <div class="modal-stats" id="modalStats"></div>
+      <div class="panel-title" style="margin-bottom:6px;">Activity Log</div>
+      <div class="modal-log" id="modalLog"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ══════════════════════════════════════════════════════════════
+// Configuration
+// ══════════════════════════════════════════════════════════════
+const WS_URL = `ws://${location.hostname}:${location.port}/ws`;
+const RECONNECT_INTERVAL = 2000;
+
+// ══════════════════════════════════════════════════════════════
+// State
+// ══════════════════════════════════════════════════════════════
+let state = null;
+let ws = null;
+let selectedAgent = null;
+let animFrame = 0;
+let hoverNode = null;
+
+const ROLE_CONFIG = {
+  orchestrator: { icon: '🧠', color: '#60a5fa', label: 'Orchestrator' },
+  explorer:     { icon: '🔭', color: '#a78bfa', label: 'Explorer' },
+  architect:    { icon: '🏛', color: '#fbbf24', label: 'Architect' },
+  coder:        { icon: '🔧', color: '#34d399', label: 'Coder' },
+  tester:       { icon: '🧪', color: '#22d3ee', label: 'Tester' },
+  reviewer:     { icon: '🔍', color: '#f472b6', label: 'Reviewer' },
+  devops:       { icon: '⚙️', color: '#fb923c', label: 'DevOps' },
+  unknown:      { icon: '❓', color: '#64748b', label: 'Agent' },
+};
+
+const STATUS_COLORS = {
+  pending: '#64748b',
+  running: '#60a5fa',
+  completed: '#34d399',
+  failed: '#f87171',
+};
+
+const PHASE_COLORS = ['#a78bfa', '#fbbf24', '#34d399', '#f472b6'];
+const PHASE_NAMES = ['Discovery', 'Planning', 'Building', 'Verification'];
+
+// ══════════════════════════════════════════════════════════════
+// WebSocket
+// ══════════════════════════════════════════════════════════════
+function connect() {
+  ws = new WebSocket(WS_URL);
+  ws.onopen = () => {
+    document.getElementById('connDot').className = 'conn-dot connected';
+    document.getElementById('connText').textContent = 'Connected';
+  };
+  ws.onclose = () => {
+    document.getElementById('connDot').className = 'conn-dot disconnected';
+    document.getElementById('connText').textContent = 'Reconnecting...';
+    setTimeout(connect, RECONNECT_INTERVAL);
+  };
+  ws.onerror = () => ws.close();
+  ws.onmessage = (e) => {
+    try {
+      const msg = JSON.parse(e.data);
+      if (msg.type === 'state.full') {
+        state = msg.state;
+        updateUI();
+      }
+    } catch(err) { console.error('Parse error:', err); }
+  };
+}
+connect();
+
+function sendEvent(event) {
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(event));
+}
+
+// ══════════════════════════════════════════════════════════════
+// UI Update (right panel)
+// ══════════════════════════════════════════════════════════════
+function updateUI() {
+  if (!state) return;
+
+  const badge = document.getElementById('statusBadge');
+  badge.textContent = state.workflow.status.toUpperCase();
+  badge.className = `status-badge status-${state.workflow.status}`;
+  document.getElementById('projectName').textContent = state.project.name || '';
+
+  if (state.workflow.elapsed > 0) {
+    const m = Math.floor(state.workflow.elapsed / 60);
+    const s = Math.floor(state.workflow.elapsed % 60);
+    document.getElementById('timer').textContent = `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+  }
+
+  // Phase rows
+  document.querySelectorAll('.phase-row').forEach((row, i) => {
+    const ph = i + 1;
+    row.className = 'phase-row';
+    if (ph < state.workflow.current_phase) row.classList.add('done');
+    else if (ph === state.workflow.current_phase) row.classList.add('active');
+  });
+
+  // Metrics
+  document.getElementById('mAgents').textContent = state.metrics.total_agents_spawned;
+  document.getElementById('mTools').textContent = state.metrics.total_tool_calls;
+  document.getElementById('mTests').textContent = state.metrics.tests_passed;
+  document.getElementById('mIssues').textContent = state.metrics.issues_found;
+
+  updateAgentList();
+  updateEventLog();
+}
+
+function updateAgentList() {
+  const container = document.getElementById('agentList');
+  const agents = Object.values(state.agents);
+  agents.sort((a, b) => {
+    if (a.status === 'running' && b.status !== 'running') return -1;
+    if (b.status === 'running' && a.status !== 'running') return 1;
+    return a.phase - b.phase;
+  });
+
+  container.innerHTML = agents.map(a => {
+    const rc = ROLE_CONFIG[a.role] || ROLE_CONFIG.unknown;
+    const sc = STATUS_COLORS[a.status] || STATUS_COLORS.pending;
+    const detail = a.status === 'running'
+      ? `<span class="agent-tool">${a.current_tool || 'initializing'}${a.current_file ? ' → ' + a.current_file.split('/').pop() : ''}</span> · iter ${a.iteration}`
+      : a.status === 'completed' ? `✅ ${a.elapsed.toFixed(1)}s · ${a.tool_calls} calls`
+      : a.status === 'failed' ? `❌ ${a.output_summary.substring(0, 40)}`
+      : 'Waiting...';
+    return `
+      <div class="agent-card ${selectedAgent === a.id ? 'selected' : ''}" onclick="selectAgent('${a.id}')">
+        <div class="agent-card-header">
+          <span class="agent-role">${rc.icon} ${rc.label}${agents.filter(x=>x.role===a.role).length>1 ? ' #'+a.id.split('-').pop() : ''}</span>
+          <span class="agent-status-dot ${a.status}"></span>
+        </div>
+        <div class="agent-detail">${detail}</div>
+        ${a.status === 'running' ? `<div class="agent-progress-bar"><div class="agent-progress-fill" style="width:${a.progress_pct}%; background:${sc}"></div></div>` : ''}
+      </div>`;
+  }).join('');
+}
+
+function updateEventLog() {
+  const container = document.getElementById('eventLog');
+  const events = (state.events || []).slice(-40).reverse();
+  container.innerHTML = events.map(e => {
+    const t = new Date(e.timestamp * 1000);
+    const time = `${String(t.getHours()).padStart(2,'0')}:${String(t.getMinutes()).padStart(2,'0')}:${String(t.getSeconds()).padStart(2,'0')}`;
+    const type = e.type.split('.')[1] || e.type;
+    let cls = '';
+    if (type === 'spawn') cls = 'spawn';
+    else if (type === 'tool_call') cls = 'tool';
+    else if (type === 'complete') cls = 'complete';
+    else if (type === 'fail') cls = 'fail';
+    else if (type === 'start') cls = 'phase';
+    const text = e.agent_id
+      ? `${(ROLE_CONFIG[e.role]||ROLE_CONFIG.unknown).icon} ${e.agent_id} ${e.tool||e.summary||''}`
+      : e.phase ? `Phase ${e.phase}` : '';
+    return `<div class="event-line"><span class="etime">${time}</span><span class="etype ${cls}">${type}</span>${text}</div>`;
+  }).join('');
+}
+
+// ── Modal ──
+function selectAgent(id) {
+  selectedAgent = id;
+  const a = state.agents[id];
+  if (!a) return;
+  const rc = ROLE_CONFIG[a.role] || ROLE_CONFIG.unknown;
+  document.getElementById('modalTitle').textContent = `${rc.icon} ${rc.label} — ${a.id}`;
+  document.getElementById('modalStats').innerHTML = `
+    <div class="modal-stat"><div class="modal-stat-val">${a.tool_calls}</div><div class="modal-stat-label">Tool Calls</div></div>
+    <div class="modal-stat"><div class="modal-stat-val">${a.iteration}</div><div class="modal-stat-label">Iterations</div></div>
+    <div class="modal-stat"><div class="modal-stat-val">${a.elapsed.toFixed(1)}s</div><div class="modal-stat-label">Elapsed</div></div>`;
+  document.getElementById('modalLog').textContent = a.log.join('\n') || 'No activity yet';
+  document.getElementById('modalOverlay').classList.add('show');
+  updateAgentList();
+}
+document.getElementById('modalClose').onclick = () => {
+  document.getElementById('modalOverlay').classList.remove('show');
+  selectedAgent = null; updateAgentList();
+};
+document.getElementById('modalOverlay').onclick = (e) => {
+  if (e.target === e.currentTarget) {
+    document.getElementById('modalOverlay').classList.remove('show');
+    selectedAgent = null; updateAgentList();
+  }
+};
+
+// ══════════════════════════════════════════════════════════════
+// Canvas 2D Visualization — Column-based layout
+// ══════════════════════════════════════════════════════════════
+const canvas = document.getElementById('agentCanvas');
+const ctx = canvas.getContext('2d');
+
+function resizeCanvas() {
+  const rect = canvas.parentElement.getBoundingClientRect();
+  canvas.width = rect.width * devicePixelRatio;
+  canvas.height = rect.height * devicePixelRatio;
+  canvas.style.width = rect.width + 'px';
+  canvas.style.height = rect.height + 'px';
+  ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+}
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas();
+
+// ── Particles ──
+class Particle {
+  constructor(w, h) { this.reset(w, h); }
+  reset(w, h) {
+    this.x = Math.random() * w; this.y = Math.random() * h;
+    this.vx = (Math.random()-0.5)*0.3; this.vy = (Math.random()-0.5)*0.3;
+    this.size = Math.random()*2+0.5; this.alpha = Math.random()*0.2+0.03; this.life = Math.random();
+  }
+  update(w, h) {
+    this.x += this.vx; this.y += this.vy; this.life -= 0.001;
+    if (this.x<0||this.x>w||this.y<0||this.y>h||this.life<=0) this.reset(w, h);
+  }
+  draw(c) {
+    c.beginPath(); c.arc(this.x, this.y, this.size, 0, Math.PI*2);
+    c.fillStyle = `rgba(96,165,250,${this.alpha*this.life})`; c.fill();
+  }
+}
+let particles = [];
+for (let i = 0; i < 50; i++) particles.push(new Particle(1200, 800));
+
+// ══════════════════════════════════════════════════════════════
+// NEW LAYOUT: 4 columns (one per phase), Orchestrator in center
+//
+//  ┌─────────┬─────────┬─────────┬─────────┐
+//  │ Phase 1 │ Phase 2 │ Phase 3 │ Phase 4 │
+//  │         │         │         │         │
+//  │ [Expl]  │ [Arch]  │ [Coder] │ [Test]  │
+//  │ [Expl]──┤─[Arch]──┤─[Coder]─┤─[Revw]  │
+//  │ [Expl]  │         │ [Coder] │ [Revw]  │
+//  │ [Expl]  │         │ [Coder] │ [Revw]  │
+//  └─────────┴─────────┴─────────┴─────────┘
+//
+// Each agent node is vertically stacked in its phase column.
+// Connections flow left-to-right between phases.
+// ══════════════════════════════════════════════════════════════
+
+function getColumnLayout(w, h) {
+  if (!state || !state.agents) return { nodes: [], connections: [], phaseColumns: [] };
+
+  const agents = Object.values(state.agents);
+  const nodes = [];
+  const connections = [];
+  const phaseColumns = [];
+
+  // Layout params
+  const padding = { top: 70, bottom: 40, left: 50, right: 30 };
+  const colCount = 4;
+  const usableW = w - padding.left - padding.right;
+  const usableH = h - padding.top - padding.bottom;
+  const colWidth = usableW / colCount;
+  const nodeR = 28;
+  const nodeGapY = 90; // min vertical gap between node centers
+
+  // Group by phase
+  const phaseGroups = { 1: [], 2: [], 3: [], 4: [] };
+  agents.forEach(a => {
+    const p = a.phase || 1;
+    if (phaseGroups[p]) phaseGroups[p].push(a);
+    else phaseGroups[1].push(a);
+  });
+
+  for (let phase = 1; phase <= 4; phase++) {
+    const group = phaseGroups[phase];
+    const n = group.length;
+    const colX = padding.left + (phase - 1) * colWidth + colWidth / 2;
+
+    // Column header info
+    phaseColumns.push({
+      phase,
+      x: colX,
+      topY: padding.top,
+      color: PHASE_COLORS[phase - 1],
+      name: PHASE_NAMES[phase - 1],
+      count: n,
+      active: state.workflow.current_phase === phase,
+      done: state.workflow.current_phase > phase,
+    });
+
+    if (n === 0) continue;
+
+    // Vertically center the group
+    const totalH = (n - 1) * nodeGapY;
+    const startY = padding.top + 50 + (usableH - 50 - totalH) / 2;
+
+    group.forEach((a, i) => {
+      const rc = ROLE_CONFIG[a.role] || ROLE_CONFIG.unknown;
+      const node = {
+        id: a.id,
+        x: colX,
+        y: Math.max(padding.top + 60, startY + i * nodeGapY),
+        radius: nodeR,
+        role: a.role,
+        label: rc.label,
+        icon: rc.icon,
+        status: a.status,
+        progress: a.progress_pct || 0,
+        tool: a.current_tool || '',
+        file: a.current_file || '',
+        toolCalls: a.tool_calls || 0,
+        elapsed: a.elapsed || 0,
+        phase,
+        color: rc.color,
+      };
+      nodes.push(node);
+    });
+
+    // Inter-phase connections: each node in this phase connects from prev phase
+    if (phase > 1) {
+      const prevNodes = nodes.filter(n => n.phase === phase - 1);
+      const currNodes = nodes.filter(n => n.phase === phase);
+      if (prevNodes.length > 0 && currNodes.length > 0) {
+        // Connect: fan from the center of prev group to each node in curr group
+        const prevCenterY = prevNodes.reduce((s, n) => s + n.y, 0) / prevNodes.length;
+        const prevX = prevNodes[0].x;
+        currNodes.forEach(cn => {
+          connections.push({
+            fromX: prevX + nodeR + 4,
+            fromY: prevCenterY,
+            toX: cn.x - nodeR - 4,
+            toY: cn.y,
+            active: cn.status === 'running',
+            phase,
+          });
+        });
+      }
+    }
+  }
+
+  return { nodes, connections, phaseColumns };
+}
+
+// ── Drawing functions ──
+
+function drawGrid(w, h) {
+  ctx.strokeStyle = 'rgba(42,58,85,0.12)';
+  ctx.lineWidth = 0.5;
+  for (let x = 0; x < w; x += 50) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,h); ctx.stroke(); }
+  for (let y = 0; y < h; y += 50) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(w,y); ctx.stroke(); }
+}
+
+function drawPhaseColumns(phaseColumns, w, h) {
+  const padding = { left: 50, right: 30 };
+  const usableW = w - padding.left - padding.right;
+  const colWidth = usableW / 4;
+
+  phaseColumns.forEach((col, i) => {
+    // Column separator lines
+    if (i > 0) {
+      const sepX = padding.left + i * colWidth;
+      ctx.beginPath();
+      ctx.moveTo(sepX, 20);
+      ctx.lineTo(sepX, h - 10);
+      ctx.strokeStyle = 'rgba(42,58,85,0.25)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 6]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // Phase header
+    const alpha = col.active ? 1.0 : col.done ? 0.7 : 0.3;
+    ctx.font = `bold 11px "JetBrains Mono", monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+
+    // Phase number circle
+    const circleY = 28;
+    ctx.beginPath();
+    ctx.arc(col.x - 38, circleY + 6, 10, 0, Math.PI * 2);
+    ctx.fillStyle = col.done ? '#1a3d2e' : col.active ? '#1e3a5f' : 'rgba(30,41,59,0.5)';
+    ctx.fill();
+    ctx.strokeStyle = col.done ? '#34d399' : col.active ? '#60a5fa' : '#2a3a55';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.fillStyle = col.done ? '#34d399' : col.active ? '#60a5fa' : '#64748b';
+    ctx.font = `bold 10px "JetBrains Mono", monospace`;
+    ctx.fillText(col.phase, col.x - 38, circleY + 1);
+
+    // Phase name
+    ctx.font = `bold 11px "JetBrains Mono", monospace`;
+    ctx.textAlign = 'left';
+    ctx.fillStyle = col.done ? '#34d399' : col.active ? col.color : `rgba(100,116,139,${alpha})`;
+    ctx.fillText(col.name.toUpperCase(), col.x - 24, circleY);
+
+    // Agent count
+    if (col.count > 0) {
+      ctx.font = `10px "JetBrains Mono", monospace`;
+      ctx.fillStyle = `rgba(100,116,139,0.6)`;
+      ctx.fillText(`${col.count} agent${col.count > 1 ? 's' : ''}`, col.x - 24, circleY + 16);
+    }
+
+    // Active phase glow strip at top
+    if (col.active) {
+      const grad = ctx.createLinearGradient(col.x - colWidth/2, 0, col.x + colWidth/2, 0);
+      grad.addColorStop(0, 'transparent');
+      grad.addColorStop(0.5, `${col.color}15`);
+      grad.addColorStop(1, 'transparent');
+      ctx.fillStyle = grad;
+      ctx.fillRect(col.x - colWidth/2, 50, colWidth, h - 60);
+    }
+  });
+}
+
+function drawConnection(conn) {
+  const { fromX, fromY, toX, toY, active, phase } = conn;
+
+  // Curved bezier connection
+  const midX = (fromX + toX) / 2;
+  ctx.beginPath();
+  ctx.moveTo(fromX, fromY);
+  ctx.bezierCurveTo(midX, fromY, midX, toY, toX, toY);
+
+  if (active) {
+    ctx.strokeStyle = `rgba(96,165,250,0.5)`;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // Animated dots along the bezier
+    for (let i = 0; i < 3; i++) {
+      const t = ((animFrame * 0.015 + i / 3) % 1);
+      const mt = 1 - t;
+      // Cubic bezier point
+      const px = mt*mt*mt*fromX + 3*mt*mt*t*midX + 3*mt*t*t*midX + t*t*t*toX;
+      const py = mt*mt*mt*fromY + 3*mt*mt*t*fromY + 3*mt*t*t*toY + t*t*t*toY;
+      ctx.beginPath();
+      ctx.arc(px, py, 3, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(96,165,250,${0.9 - t*0.6})`;
+      ctx.fill();
+    }
+  } else {
+    ctx.strokeStyle = `rgba(42,58,85,0.35)`;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 6]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+}
+
+function drawNode(node) {
+  const sc = STATUS_COLORS[node.status] || STATUS_COLORS.pending;
+  const r = node.radius;
+  const isHover = hoverNode && hoverNode.id === node.id;
+
+  // Glow for running
+  if (node.status === 'running') {
+    const glow = ctx.createRadialGradient(node.x, node.y, r * 0.5, node.x, node.y, r * 2.5);
+    glow.addColorStop(0, `${node.color}20`);
+    glow.addColorStop(1, 'transparent');
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.arc(node.x, node.y, r * 2.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Progress ring
+  if (node.status === 'running' && node.progress > 0) {
+    ctx.beginPath();
+    ctx.arc(node.x, node.y, r + 5, -Math.PI/2, -Math.PI/2 + (node.progress/100)*Math.PI*2);
+    ctx.strokeStyle = sc;
+    ctx.lineWidth = 3;
+    ctx.lineCap = 'round';
+    ctx.stroke();
+    ctx.lineCap = 'butt';
+  }
+
+  // Background track ring
+  ctx.beginPath();
+  ctx.arc(node.x, node.y, r + 5, 0, Math.PI * 2);
+  ctx.strokeStyle = 'rgba(42,58,85,0.3)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // Main circle
+  ctx.beginPath();
+  ctx.arc(node.x, node.y, r, 0, Math.PI * 2);
+  const bgGrad = ctx.createRadialGradient(node.x - r*0.3, node.y - r*0.3, 0, node.x, node.y, r);
+  bgGrad.addColorStop(0, '#1e293b');
+  bgGrad.addColorStop(1, '#0f172a');
+  ctx.fillStyle = bgGrad;
+  ctx.fill();
+  ctx.strokeStyle = isHover ? '#fff' : sc;
+  ctx.lineWidth = node.status === 'running' ? 2.5 : 1.5;
+  ctx.stroke();
+
+  // Icon
+  ctx.font = `${r * 0.75}px serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(node.icon, node.x, node.y - 1);
+
+  // Label below circle
+  ctx.font = `bold 10px "JetBrains Mono", monospace`;
+  ctx.fillStyle = '#e2e8f0';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillText(node.label, node.x, node.y + r + 8);
+
+  // ID suffix (for multiples)
+  const suffix = node.id.includes('-') ? '#' + node.id.split('-').pop() : '';
+  if (suffix) {
+    ctx.font = `9px "JetBrains Mono", monospace`;
+    ctx.fillStyle = '#64748b';
+    ctx.fillText(suffix, node.x, node.y + r + 21);
+  }
+
+  // Tool indicator when running
+  if (node.status === 'running' && node.tool) {
+    ctx.font = `9px "JetBrains Mono", monospace`;
+    ctx.fillStyle = '#22d3ee';
+    const toolText = node.tool + (node.file ? ' → ' + node.file.split('/').pop() : '');
+    ctx.fillText(toolText.substring(0, 25), node.x, node.y + r + 33);
+  }
+
+  // Status badges
+  if (node.status === 'completed') {
+    ctx.beginPath();
+    ctx.arc(node.x + r * 0.7, node.y - r * 0.7, 8, 0, Math.PI * 2);
+    ctx.fillStyle = '#065f46';
+    ctx.fill();
+    ctx.font = 'bold 10px sans-serif';
+    ctx.fillStyle = '#34d399';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('✓', node.x + r * 0.7, node.y - r * 0.7);
+  } else if (node.status === 'failed') {
+    ctx.beginPath();
+    ctx.arc(node.x + r * 0.7, node.y - r * 0.7, 8, 0, Math.PI * 2);
+    ctx.fillStyle = '#7f1d1d';
+    ctx.fill();
+    ctx.font = 'bold 10px sans-serif';
+    ctx.fillStyle = '#f87171';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('✗', node.x + r * 0.7, node.y - r * 0.7);
+  }
+}
+
+function drawIdleState(w, h) {
+  // Centered idle message
+  ctx.save();
+  ctx.font = '15px "JetBrains Mono", monospace';
+  ctx.fillStyle = '#2a3a55';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('Waiting for workflow to start...', w/2, h/2 - 12);
+  ctx.font = '11px "JetBrains Mono", monospace';
+  ctx.fillStyle = '#1e293b';
+  ctx.fillText('Press D for demo  ·  POST to /event  ·  WebSocket at /ws', w/2, h/2 + 12);
+  ctx.restore();
+}
+
+// ── Mouse hover detection ──
+canvas.addEventListener('mousemove', (e) => {
+  if (!state) return;
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+  const w = rect.width;
+  const h = rect.height;
+  const { nodes } = getColumnLayout(w, h);
+  hoverNode = null;
+  for (const n of nodes) {
+    const dx = mx - n.x, dy = my - n.y;
+    if (Math.sqrt(dx*dx + dy*dy) < n.radius + 5) {
+      hoverNode = n;
+      canvas.style.cursor = 'pointer';
+      return;
+    }
+  }
+  canvas.style.cursor = 'default';
+});
+
+canvas.addEventListener('click', (e) => {
+  if (hoverNode && state.agents[hoverNode.id]) selectAgent(hoverNode.id);
+});
+
+// ══════════════════════════════════════════════════════════════
+// Main Render Loop
+// ══════════════════════════════════════════════════════════════
+function render() {
+  const w = canvas.width / devicePixelRatio;
+  const h = canvas.height / devicePixelRatio;
+
+  ctx.save();
+  ctx.fillStyle = '#0a0e17';
+  ctx.fillRect(0, 0, w, h);
+
+  drawGrid(w, h);
+  particles.forEach(p => { p.update(w, h); p.draw(ctx); });
+
+  if (!state || Object.keys(state.agents).length === 0) {
+    drawIdleState(w, h);
+    ctx.restore();
+    animFrame++;
+    requestAnimationFrame(render);
+    return;
+  }
+
+  const { nodes, connections, phaseColumns } = getColumnLayout(w, h);
+
+  // Draw phase columns (backgrounds + headers)
+  drawPhaseColumns(phaseColumns, w, h);
+
+  // Draw connections
+  connections.forEach(c => drawConnection(c));
+
+  // Draw nodes
+  nodes.forEach(n => drawNode(n));
+
+  ctx.restore();
+  animFrame++;
+  requestAnimationFrame(render);
+}
+render();
+
+// ── Timer ──
+setInterval(() => {
+  if (state && state.workflow.status === 'running' && state.workflow.started_at) {
+    state.workflow.elapsed = Date.now()/1000 - state.workflow.started_at;
+    const m = Math.floor(state.workflow.elapsed/60), s = Math.floor(state.workflow.elapsed%60);
+    document.getElementById('timer').textContent = `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+  }
+}, 1000);
+
+// ══════════════════════════════════════════════════════════════
+// Demo Mode — press D
+// ══════════════════════════════════════════════════════════════
+document.addEventListener('keydown', (e) => {
+  if ((e.key === 'd' || e.key === 'D') && !e.ctrlKey && !e.metaKey) runDemo();
+});
+
+async function runDemo() {
+  const delay = ms => new Promise(r => setTimeout(r, ms));
+  const send = ev => { ev.timestamp = Date.now()/1000; sendEvent(ev); };
+
+  // Reset
+  send({ type: 'workflow.start', project: { name: 'bookshelf-api', path: '~/projects/bookshelf', requirement: 'Build REST API with auth, CRUD, tests, and deployment' }});
+  await delay(500);
+
+  // ── Phase 1: Discovery (4 explorers) ──
+  send({ type: 'phase.start', phase: 1 });
+  await delay(300);
+  const explorers = ['explorer-fs', 'explorer-deps', 'explorer-api', 'explorer-db'];
+  for (const id of explorers) {
+    send({ type: 'agent.spawn', agent_id: id, role: 'explorer', phase: 1, engine: 'delegate_task' });
+    await delay(150);
+  }
+  for (let i = 0; i < 6; i++) {
+    for (const id of explorers) {
+      const tools = ['search_files', 'read_file', 'terminal', 'search_files'];
+      const files = ['src/', 'package.json', 'requirements.txt', 'docker-compose.yaml'];
+      send({ type: 'agent.tool_call', agent_id: id, tool: tools[i%4], file: files[(i+explorers.indexOf(id))%4], iteration: i+1 });
+    }
+    await delay(400);
+  }
+  for (const id of explorers) {
+    send({ type: 'agent.complete', agent_id: id, summary: 'Exploration complete' });
+    await delay(120);
+  }
+  send({ type: 'phase.complete', phase: 1 });
+  await delay(600);
+
+  // ── Phase 2: Planning (1 architect + 2 planners) ──
+  send({ type: 'phase.start', phase: 2 });
+  await delay(200);
+  const planners = ['architect-main', 'planner-api', 'planner-db'];
+  for (const id of planners) {
+    send({ type: 'agent.spawn', agent_id: id, role: 'architect', phase: 2, engine: 'delegate_task' });
+    await delay(100);
+  }
+  for (let i = 0; i < 8; i++) {
+    const tools = ['read_file', 'write_file', 'search_files'];
+    const files = ['architecture.yaml', 'api-spec.yaml', 'schema.sql'];
+    for (const id of planners) {
+      send({ type: 'agent.tool_call', agent_id: id, tool: tools[i%3], file: files[(i+planners.indexOf(id))%3], iteration: i+1 });
+    }
+    await delay(450);
+  }
+  for (const id of planners) {
+    send({ type: 'agent.complete', agent_id: id, summary: 'Design complete', artifacts: ['architecture.yaml'] });
+    await delay(180);
+  }
+  send({ type: 'phase.complete', phase: 2 });
+  await delay(600);
+
+  // ── Phase 3: Building (4 coders) ──
+  send({ type: 'phase.start', phase: 3 });
+  await delay(200);
+  const coders = ['coder-backend', 'coder-frontend', 'coder-auth', 'coder-tests'];
+  for (const id of coders) {
+    send({ type: 'agent.spawn', agent_id: id, role: 'coder', phase: 3, engine: 'claude_code' });
+    await delay(100);
+  }
+  for (let i = 0; i < 14; i++) {
+    const tools = ['Read', 'Edit', 'Write', 'Bash'];
+    const fileMap = {
+      'coder-backend': ['routes.py', 'models.py', 'db.py', 'middleware.py'],
+      'coder-frontend': ['App.tsx', 'api.ts', 'styles.css', 'BookList.tsx'],
+      'coder-auth': ['auth.py', 'jwt_utils.py', 'permissions.py', 'login.tsx'],
+      'coder-tests': ['test_api.py', 'test_auth.py', 'conftest.py', 'fixtures.py'],
+    };
+    for (const id of coders) {
+      send({ type: 'agent.tool_call', agent_id: id, tool: tools[i%4], file: fileMap[id][i%4], iteration: i+1 });
+    }
+    await delay(280);
+  }
+  send({ type: 'metrics.update', metrics: { files_created: 16, files_modified: 8 }});
+  for (const id of coders) {
+    send({ type: 'agent.complete', agent_id: id, summary: 'Implementation complete' });
+    await delay(120);
+  }
+  send({ type: 'phase.complete', phase: 3 });
+  send({ type: 'metrics.update', metrics: { tests_passed: 22, files_created: 18 }});
+  await delay(600);
+
+  // ── Phase 4: Verification (1 tester + 3 reviewers) ──
+  send({ type: 'phase.start', phase: 4 });
+  await delay(200);
+  send({ type: 'agent.spawn', agent_id: 'tester-main', role: 'tester', phase: 4, engine: 'claude_code' });
+  const reviewers = ['reviewer-bugs', 'reviewer-security', 'reviewer-quality'];
+  for (const id of reviewers) {
+    send({ type: 'agent.spawn', agent_id: id, role: 'reviewer', phase: 4, engine: 'delegate_task' });
+    await delay(80);
+  }
+  for (let i = 0; i < 10; i++) {
+    send({ type: 'agent.tool_call', agent_id: 'tester-main', tool: ['Write', 'Bash', 'Read'][i%3], file: 'tests/', iteration: i+1 });
+    for (const id of reviewers) {
+      send({ type: 'agent.tool_call', agent_id: id, tool: ['read_file', 'search_files'][i%2], file: ['routes.py', 'auth.py', 'models.py'][i%3], iteration: i+1 });
+    }
+    await delay(350);
+  }
+  send({ type: 'agent.complete', agent_id: 'tester-main', summary: '28 tests passed, 2 failed' });
+  send({ type: 'metrics.update', metrics: { tests_passed: 28, issues_found: 7 }});
+  for (const id of reviewers) {
+    await delay(200);
+    send({ type: 'agent.complete', agent_id: id, summary: `Found ${Math.floor(Math.random()*3)+1} high-confidence issues` });
+  }
+  send({ type: 'phase.complete', phase: 4 });
+  await delay(500);
+
+  send({ type: 'workflow.complete' });
+}
+</script>
+</body>
+</html>

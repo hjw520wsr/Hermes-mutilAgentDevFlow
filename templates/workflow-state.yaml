@@ -1,0 +1,93 @@
+# Multi-Agent Workflow State Template
+# Copy and fill this template to track workflow progress
+# Save to: docs/plans/workflow-state.yaml
+
+workflow:
+  feature: "{feature_name}"
+  started: "{ISO timestamp}"
+  status: discovery|planning|building|verification|fix_loop|complete
+  base_commit: "{git SHA before changes}"
+  complexity: simple|medium|complex|mega
+
+phase1_discovery:
+  status: pending|running|complete
+  explorers:
+    structure:
+      status: pending|running|complete|failed
+      output_summary: ""
+    feature:
+      status: pending|running|complete|failed
+      output_summary: ""
+    test:
+      status: pending|running|complete|failed
+      output_summary: ""
+  merged_discovery: ""  # path to merged report or inline summary
+
+phase2_planning:
+  status: pending|running|complete|user_review
+  architecture_file: "docs/plans/architecture.yaml"
+  plan_file: "docs/plans/plan.md"
+  total_tasks: 0
+  parallel_groups: 0
+  user_approved: false
+
+phase3_building:
+  status: pending|running|complete
+  current_group: 0
+  groups:
+    - group_id: 1
+      tasks:
+        - id: "task-1"
+          title: ""
+          coder: "claude-code"
+          status: pending|running|complete|failed
+          commits: []
+          issues: []
+      status: pending|running|complete
+    - group_id: 2
+      tasks: []
+      status: pending
+
+phase4_verification:
+  status: pending|running|complete
+  tester:
+    status: pending|running|complete
+    tests_added: 0
+    all_passing: false
+    coverage: ""
+  reviewers:
+    bug_hunter:
+      status: pending|running|complete
+      issues_raw: 0
+      issues_filtered: 0  # after confidence >= 80
+    security:
+      status: pending|running|complete
+      issues_raw: 0
+      issues_filtered: 0
+    architecture:
+      status: pending|running|complete
+      issues_raw: 0
+      issues_filtered: 0
+  aggregated_issues:
+    critical: 0
+    high: 0
+    medium: 0
+    low: 0
+    total_retained: 0
+
+fix_loop:
+  iteration: 0
+  max_iterations: 3
+  history:
+    - iteration: 1
+      issues_sent: 0
+      issues_fixed: 0
+      issues_remaining: 0
+
+result:
+  status: success|partial|failed
+  files_created: []
+  files_modified: []
+  tests_added: 0
+  commits: 0
+  total_duration: ""

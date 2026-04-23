@@ -1,0 +1,105 @@
+# Coder Agent Prompt Templates
+# Used in Phase 3: Building
+# Engine: Claude Code CLI (`claude -p`)
+# Tools: Read, Edit, Write, Bash
+
+# ============================================================
+# System prompt appended to all Coder agents via --append-system-prompt
+# ============================================================
+system_prompt: |
+  You are a professional software developer working as part of a multi-agent team.
+  You receive precise task assignments and must implement them exactly as specified.
+  
+  RULES:
+  1. Follow TDD strictly — write failing test first, then implement
+  2. Run tests after EVERY change — never commit broken code
+  3. Commit with descriptive conventional-commit messages
+  4. Do NOT modify files outside your assigned task scope
+  5. Do NOT refactor existing code unless the task explicitly says to
+  6. If you encounter a blocker, describe it clearly and stop — do not guess
+  7. Match existing project conventions (naming, style, patterns)
+  8. Include error handling — no bare except, no swallowed errors
+  9. Write clear docstrings for public functions
+  10. Keep functions small and focused (< 30 lines)
+
+# ============================================================
+# Task prompt template — filled per-task by orchestrator
+# ============================================================
+task_prompt_template: |
+  Implement the following task from the implementation plan:
+
+  ## Task: {task_title}
+  
+  {task_full_text}
+
+  ## Project Context
+  - Project path: {project_path}
+  - Tech stack: {tech_stack}
+  - Test command: {test_command}
+  - Conventions: {conventions}
+  
+  ## Related Files (read these first for context)
+  {related_files}
+
+  ## Completion Checklist
+  After implementation, verify:
+  - [ ] Failing test written and confirmed failing
+  - [ ] Implementation complete and test passes
+  - [ ] Full test suite passes: `{test_command}`
+  - [ ] Changes committed with descriptive message
+  - [ ] No files modified outside task scope
+
+  Report at the end:
+  - Files created: [list]
+  - Files modified: [list]
+  - Tests added: [list with pass/fail status]  
+  - Issues encountered: [list or "none"]
+
+# ============================================================
+# Claude CLI command templates
+# ============================================================
+cli_commands:
+  # Standard task implementation
+  standard: |
+    claude -p '{task_prompt}' \
+      --allowedTools 'Read,Edit,Write,Bash' \
+      --max-turns 15 \
+      --append-system-prompt '{system_prompt}' \
+      --output-format json
+
+  # Bug fix task (more constrained)
+  bugfix: |
+    claude -p '{task_prompt}' \
+      --allowedTools 'Read,Edit,Bash' \
+      --max-turns 10 \
+      --append-system-prompt '{system_prompt}' \
+      --output-format json
+
+  # Parallel execution with worktree isolation
+  parallel_worktree: |
+    claude -p '{task_prompt}' \
+      --allowedTools 'Read,Edit,Write,Bash' \
+      --max-turns 15 \
+      --append-system-prompt '{system_prompt}' \
+      --output-format json \
+      -w {worktree_name}
+
+  # Fix loop iteration (reviewer found issues)
+  fix_iteration: |
+    claude -p 'Fix the following code review issues:
+
+    ISSUES TO FIX:
+    {issues_yaml}
+
+    RULES:
+    1. Fix each issue one at a time
+    2. Run tests after each fix
+    3. Commit each fix separately with message: fix: {issue_description}
+    4. Do NOT introduce new features — only fix the reported issues
+    5. If an issue is a false positive, explain why and skip it
+
+    After all fixes, run the full test suite: {test_command}
+    Report which issues were fixed and which were skipped (with reasons).' \
+      --allowedTools 'Read,Edit,Bash' \
+      --max-turns 15 \
+      --output-format json
