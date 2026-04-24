@@ -2,6 +2,7 @@
 # Used in Phase 3: Building
 # Engine: Claude Code CLI (`claude -p`)
 # Tools: Read, Edit, Write, Bash
+# v2: Added interface contract injection + file ownership
 
 # ============================================================
 # System prompt appended to all Coder agents via --append-system-prompt
@@ -14,13 +15,50 @@ system_prompt: |
   1. Follow TDD strictly — write failing test first, then implement
   2. Run tests after EVERY change — never commit broken code
   3. Commit with descriptive conventional-commit messages
-  4. Do NOT modify files outside your assigned task scope
+  4. Do NOT modify files outside your assigned task scope (see INTERFACE CONTRACT)
   5. Do NOT refactor existing code unless the task explicitly says to
   6. If you encounter a blocker, describe it clearly and stop — do not guess
   7. Match existing project conventions (naming, style, patterns)
   8. Include error handling — no bare except, no swallowed errors
   9. Write clear docstrings for public functions
   10. Keep functions small and focused (< 30 lines)
+  11. STRICTLY follow include-path conventions from the Interface Contract
+  12. Do NOT create files that are NOT listed in your file_ownership section
+  13. Do NOT define third-party init macros unless you are the designated owner
+
+# ============================================================
+# Interface Contract template — injected into EVERY Coder prompt
+# Orchestrator fills this from Architect output before dispatching
+# ============================================================
+interface_contract_template: |
+  ## ⚠️ INTERFACE CONTRACT (MANDATORY — violations will be rejected)
+  
+  ### File Ownership (YOUR assigned files only)
+  You are **{coder_id}**. You may ONLY create/modify these files:
+  - Creates: {owned_create_files}
+  - Modifies: {owned_modify_files}
+  
+  ANY file not listed above is OFF-LIMITS. If you need changes to another file,
+  describe what you need in your completion report and STOP.
+  
+  ### Include Path Convention
+  - Style: {include_path_style}
+  - Base directory: {include_base_dir}
+  - Third-party prefix: {third_party_prefix}
+  - ✅ Correct: {include_examples_correct}
+  - ❌ Wrong: {include_examples_wrong}
+  
+  ### Third-Party Initialization Rules
+  {third_party_init_rules}
+  
+  ### Naming Conventions
+  - Files: {naming_files}
+  - Classes: {naming_classes}
+  - Methods: {naming_methods}
+  - Constants: {naming_constants}
+  
+  ### API Contracts (interfaces you may call)
+  {api_contracts_yaml}
 
 # ============================================================
 # Task prompt template — filled per-task by orchestrator
@@ -41,19 +79,24 @@ task_prompt_template: |
   ## Related Files (read these first for context)
   {related_files}
 
+  {interface_contract}
+
   ## Completion Checklist
   After implementation, verify:
   - [ ] Failing test written and confirmed failing
   - [ ] Implementation complete and test passes
   - [ ] Full test suite passes: `{test_command}`
   - [ ] Changes committed with descriptive message
-  - [ ] No files modified outside task scope
+  - [ ] No files modified outside task scope (per Interface Contract)
+  - [ ] Include paths follow convention (per Interface Contract)
+  - [ ] No unauthorized third-party init macros
 
   Report at the end:
   - Files created: [list]
   - Files modified: [list]
   - Tests added: [list with pass/fail status]  
   - Issues encountered: [list or "none"]
+  - Cross-Coder dependencies needed: [list of changes needed in other Coders' files, or "none"]
 
 # ============================================================
 # Claude CLI command templates
@@ -97,9 +140,34 @@ cli_commands:
     3. Commit each fix separately with message: fix: {issue_description}
     4. Do NOT introduce new features — only fix the reported issues
     5. If an issue is a false positive, explain why and skip it
+    6. MAINTAIN all Interface Contract rules (include paths, file ownership)
 
     After all fixes, run the full test suite: {test_command}
     Report which issues were fixed and which were skipped (with reasons).' \
       --allowedTools 'Read,Edit,Bash' \
       --max-turns 15 \
       --output-format json
+
+# ============================================================
+# Fallback: delegate_task Coder (when Claude CLI unavailable)
+# ============================================================
+delegate_task_fallback:
+  goal: "Implement task: {task_title}"
+  context_template: |
+    You are a software developer. Implement this task:
+
+    ## Task
+    {task_full_text}
+
+    ## Project Context
+    {project_context}
+
+    {interface_contract}
+
+    ## Rules
+    1. Follow TDD — write failing test first
+    2. Run tests after changes
+    3. Commit with descriptive messages
+    4. Stay within your file ownership boundaries
+    5. Follow include path conventions exactly
+  toolsets: ["terminal", "file"]

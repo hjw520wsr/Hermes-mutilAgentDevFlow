@@ -1,7 +1,7 @@
 ---
 name: multi-agent-dev
 description: Multi-Agent collaborative software development workflow. Orchestrates Explorer, Architect, Coder (Claude Code), Tester, and Reviewer agents in a phased pipeline — Discovery → Planning → Building → Verification — with confidence-scored reviews and evaluator-optimizer loops.
-version: 1.0.0
+version: 2.0.0
 author: Hermes Agent
 license: MIT
 metadata:
@@ -32,6 +32,111 @@ Orchestrate a team of specialized AI agents to collaboratively build software. I
 - **Claude Code authenticated**: run `claude auth status` to verify
 - **Git repository**: project must be a git repo (for worktree isolation)
 
+## Pre-flight Checks (MANDATORY before Phase 1)
+
+Before starting any workflow, run these checks. **Do not proceed if any check fails — fix or establish fallback first.**
+
+```python
+# Step 1: Verify delegate_task works (catches provider auth issues)
+preflight_result = delegate_task(
+    goal="Return the text 'PREFLIGHT_OK' and nothing else.",
+    toolsets=[]
+)
+delegate_ok = "PREFLIGHT_OK" in preflight_result
+
+# Step 2: Verify Claude Code CLI is authenticated
+claude_auth = terminal(command="claude auth status --text 2>&1", timeout=10)
+claude_ok = claude_auth.exit_code == 0
+
+# Step 3: Verify clean git working tree
+git_status = terminal(command="git status --porcelain", workdir=project_path, timeout=10)
+git_clean = len(git_status.output.strip()) == 0
+
+# Step 4: Determine available engines and set fallback plan
+engines = {
+    "delegate_task": delegate_ok,
+    "claude_code": claude_ok,
+}
+```
+
+### Fallback Matrix
+
+Based on pre-flight results, determine which engine to use for each agent role:
+
+| Agent Role | Primary Engine | Fallback 1 | Fallback 2 |
+|-----------|---------------|------------|------------|
+| Explorer | `delegate_task` | `delegate_task(acp_command='claude')` | Orchestrator self-executes |
+| Architect | `delegate_task` | `delegate_task(acp_command='claude')` | Orchestrator self-executes |
+| Coder | `claude -p` (CLI) | `delegate_task` | — |
+| Tester | `claude -p` (CLI) | `delegate_task` | Orchestrator self-executes |
+| Reviewer | `delegate_task` | `delegate_task(acp_command='claude')` | Orchestrator self-executes |
+
+**Rule: A phase can be DEGRADED (using fallback engine) but NEVER SKIPPED entirely.**
+
+If both `delegate_task` and `claude` CLI are unavailable for a role, the Orchestrator MUST execute that role's tasks itself using its own tools (read_file, search_files, write_file, terminal).
+
+## Fallback Strategy
+
+When an agent call fails, follow this escalation chain:
+
+```
+delegate_task(default provider) fails
+    │
+    ├─→ Retry with: delegate_task(acp_command='claude', acp_args=['--acp', '--stdio'])
+    │       Uses Claude Code's independent authentication
+    │
+    ├─→ If still fails: Orchestrator self-executes the task
+    │       Use the same prompt/context, but execute with Orchestrator's own tools
+    │       Emit dashboard event: agent.spawn(role="orchestrator-fallback")
+    │
+    └─→ NEVER skip the phase entirely
+
+claude -p (CLI) fails
+    │
+    ├─→ Retry once with longer timeout
+    │
+    ├─→ Fallback: delegate_task with terminal toolset
+    │
+    └─→ Last resort: Orchestrator self-executes
+```
+
+### Fallback Code Pattern
+
+```python
+def run_with_fallback(goal, context, toolsets, role, phase, dashboard=None):
+    """Execute an agent task with automatic fallback chain."""
+    agent_id = f"{role}-{phase}"
+
+    # Attempt 1: delegate_task (default provider)
+    try:
+        if dashboard: dashboard.agent_spawn(agent_id, role, phase, engine="delegate_task")
+        result = delegate_task(goal=goal, context=context, toolsets=toolsets)
+        if dashboard: dashboard.agent_complete(agent_id, result="success")
+        return result
+    except Exception as e:
+        if dashboard: dashboard.agent_error(agent_id, str(e))
+
+    # Attempt 2: delegate_task with Claude Code ACP
+    try:
+        fallback_id = f"{role}-{phase}-fallback"
+        if dashboard: dashboard.agent_spawn(fallback_id, role, phase, engine="claude-acp")
+        result = delegate_task(
+            goal=goal, context=context, toolsets=toolsets,
+            acp_command='claude', acp_args=['--acp', '--stdio']
+        )
+        if dashboard: dashboard.agent_complete(fallback_id, result="success-via-fallback")
+        return result
+    except Exception as e:
+        if dashboard: dashboard.agent_error(fallback_id, str(e))
+
+    # Attempt 3: Orchestrator self-executes
+    orchestrator_id = f"{role}-{phase}-orchestrator"
+    if dashboard: dashboard.agent_spawn(orchestrator_id, "orchestrator-fallback", phase)
+    # Orchestrator uses its own tools to fulfill the role
+    # ... (execute with read_file, search_files, write_file, terminal as needed)
+    if dashboard: dashboard.agent_complete(orchestrator_id, result="orchestrator-fallback")
+```
+
 ## Agent Roster
 
 | Agent | Count | Engine | Tools | Role |
@@ -46,11 +151,58 @@ Orchestrate a team of specialized AI agents to collaboratively build software. I
 ## The 4-Phase Workflow
 
 ```
-Phase 1: Discovery ──→ Phase 2: Planning ──→ Phase 3: Building ──→ Phase 4: Verification
-  (Explorers)           (Architect)            (Coders ∥)            (Tester + Reviewers)
-                                                    ↑                       │
-                                                    └───── Fix Loop ────────┘
+Pre-flight ──→ Phase 1: Discovery ──⊕──→ Phase 2: Planning ──⊕──→ Phase 3: Building ──→ Phase 4: Verification
+ (Checks)       (Explorers)        Gate1   (Architect)       Gate2   (Coders ∥)           (Tester + Reviewers)
+                                                                          ↑                       │
+                                                                          └───── Fix Loop ────────┘
+
+⊕ = Mandatory Gate (cannot be bypassed)
 ```
+
+## Mandatory Gates (CANNOT BE SKIPPED)
+
+Gates enforce quality checkpoints between phases. The Orchestrator MUST NOT proceed past a gate until its conditions are met.
+
+### Gate 0: Pre-flight → Phase 1
+**Condition:** All pre-flight checks pass OR fallback plan established.
+```
+✅ delegate_task OR claude CLI available (at least one works)
+✅ Git working tree is clean
+✅ Fallback engine assignments documented
+```
+
+### Gate 1: Phase 1 → Phase 2
+**Condition:** Discovery report exists and covers minimum required areas.
+```
+✅ At least ONE Explorer (or Orchestrator fallback) produced a report
+✅ Report contains: project structure, tech stack, relevant code analysis
+✅ Merged discovery context saved as artifact
+```
+**If gate fails:** Re-run Discovery with fallback engine, or Orchestrator self-explores.
+
+### Gate 2: Phase 2 → Phase 3 (USER CONFIRMATION REQUIRED)
+**Condition:** Architecture and plan exist, AND user has explicitly approved.
+```
+✅ architecture.yaml exists with component definitions
+✅ plan.md exists with PARALLEL-GROUP annotations
+✅ Interface contract generated (include paths, naming, file ownership)
+✅ User has reviewed and approved the plan via clarify()
+```
+**Orchestrator MUST:**
+1. Present architecture overview + task count + parallel groups to user
+2. Call `clarify(question="Review the plan above. Proceed with implementation?", choices=["Approve and proceed", "Modify plan", "Cancel"])`
+3. Wait for user response before entering Phase 3
+4. If user says "Modify" → re-run Architect with user's feedback
+
+### Gate 3: Phase 3 → Complete (implicit)
+**Condition:** Phase 4 (Verification) completed — Testing and Review are NOT optional.
+```
+✅ Tester Agent ran (or Orchestrator ran tests as fallback)
+✅ At least ONE Reviewer ran (or Orchestrator performed review as fallback)
+✅ All critical/high issues from review are fixed (or max 3 fix loops reached)
+✅ Final test suite passes
+```
+**Compilation success alone does NOT satisfy this gate.**
 
 ### Phase 1: Discovery (Parallel Explorers)
 
@@ -507,6 +659,76 @@ Routing decision tree:
     → Requires parallel work streams? → Mega
 ```
 
+## Interface Contract (INJECT into every Coder prompt)
+
+When multiple Coders work in parallel, they MUST receive a shared interface contract to prevent conflicts. The Orchestrator generates this from the Architect's output and injects it into every Coder's prompt.
+
+### Required Contract Fields
+
+```yaml
+interface_contract:
+  # Include path convention — eliminates the #1 integration issue
+  include_paths:
+    style: "relative to src/"          # e.g., "core/common.h" NOT "src/core/common.h"
+    base_directory: "src/"              # what CMake/build tool adds as include dir
+    third_party: "third_party/"        # third-party headers prefix
+    examples:
+      correct: ["core/common.h", "graphics/shader.h", "stb/stb_image.h"]
+      wrong: ["src/core/common.h", "../third_party/stb/stb_image.h"]
+
+  # File ownership — each Coder only creates/modifies their assigned files
+  file_ownership:
+    coder_A:
+      creates: ["src/core/engine.cpp", "src/core/engine.h"]
+      modifies: ["CMakeLists.txt"]
+    coder_B:
+      creates: ["src/graphics/renderer.cpp", "src/graphics/shader.cpp"]
+      modifies: []
+    coder_C:
+      creates: ["src/scene/camera.cpp", "src/scene/mesh.cpp"]
+      modifies: []
+    shared_files: []  # files NO Coder may touch — Orchestrator handles these
+
+  # Third-party initialization — exactly ONE designated owner
+  third_party_init:
+    stb_image:
+      owner: "coder_A"
+      implementation_file: "third_party/stb/stb_image_implementation.cpp"
+      rule: "Only coder_A creates the #define STB_IMAGE_IMPLEMENTATION file. Other Coders only #include the header."
+
+  # Naming conventions
+  naming:
+    files: "snake_case"
+    classes: "PascalCase"
+    methods: "camelCase"
+    constants: "UPPER_SNAKE_CASE"
+    namespaces: "lowercase"
+
+  # Inter-module API contracts (from Architect output)
+  api_contracts:
+    - provider: "core/engine.h"
+      consumer: ["graphics/renderer.cpp", "scene/scene.cpp"]
+      interface: "class Engine { void init(); void run(); void shutdown(); }"
+```
+
+### Injection Pattern
+
+The Orchestrator MUST append this to every Coder's task prompt:
+
+```
+## ⚠️ INTERFACE CONTRACT (MANDATORY — violations will be rejected)
+
+{interface_contract_yaml}
+
+RULES:
+1. You may ONLY create/modify files listed under YOUR ownership
+2. Use include paths EXACTLY as specified (no src/ prefix, no relative paths)
+3. Do NOT define STB_IMAGE_IMPLEMENTATION or similar third-party init macros
+   unless you are the designated owner
+4. Follow naming conventions exactly
+5. When calling APIs from other modules, use the signatures from api_contracts
+```
+
 ## Communication Protocol: Structured Artifacts
 
 Agents communicate via YAML artifacts, NOT raw conversation:
@@ -553,6 +775,7 @@ Orchestrator:
 
 ## Pitfalls
 
+### Original Pitfalls (v1)
 1. **Don't skip Discovery** — Coders without context write code that doesn't fit the project
 2. **Don't let Explorers/Reviewers write files** — toolsets must be read-only (`["file"]` without terminal)
 3. **Don't exceed 3 fix loop iterations** — diminishing returns; accept minor issues after 3
@@ -561,6 +784,17 @@ Orchestrator:
 6. **Provide complete context to each Agent** — they have NO memory of other agents' work; include everything they need in the prompt
 7. **Use `--max-turns` with Claude Code** — prevent runaway loops (15 for implementation, 20 for testing)
 8. **Save intermediate artifacts** — if a phase fails, you can restart from the last good artifact instead of redoing everything
+
+### v2 Additions (from production retrospective)
+
+9. **NEVER skip Pre-flight Checks** — Provider auth failures mid-workflow waste all previous work. Run pre-flight BEFORE Phase 1, not after.
+10. **ALWAYS inject Interface Contract into Coder prompts** — Without explicit include-path conventions and file ownership, parallel Coders produce incompatible code (wrong #include paths, duplicate third-party init macros, naming conflicts). This was the #1 integration failure in production.
+11. **NEVER proceed past a Gate without validation** — Gate 2 (user approval) is especially critical. Auto-proceeding from plan to build without user confirmation led to wasted compute on wrong designs.
+12. **Establish fallback BEFORE you need it** — Don't discover `delegate_task` is broken after 30 minutes of planning. Pre-flight determines the fallback engine for every role upfront.
+13. **Single owner for third-party init macros** — `#define STB_IMAGE_IMPLEMENTATION` (and similar) must appear in EXACTLY one file. Assign one Coder as owner in the interface contract. Multiple definitions cause linker errors that are hard to debug across parallel agents.
+14. **Dashboard is not optional for Complex/Mega tasks** — Without visibility into which agent is doing what, debugging multi-agent failures is guesswork. Always start the dashboard for ≥3 parallel agents.
+15. **Fallback degrades gracefully, never skips** — If `delegate_task` fails for Explorer, the Orchestrator self-explores. If `claude -p` fails for Coder, use `delegate_task` with terminal toolset. A degraded phase is infinitely better than a skipped phase.
+16. **Test the INTEGRATION, not just the units** — After parallel Coders complete, run a build/compile step BEFORE sending to Tester. Catch include-path and linking errors early.
 
 ## Real-Time Dashboard (Visual Monitoring)
 

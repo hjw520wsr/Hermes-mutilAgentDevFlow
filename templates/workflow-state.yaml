@@ -1,32 +1,84 @@
 # Multi-Agent Workflow State Template
 # Copy and fill this template to track workflow progress
 # Save to: docs/plans/workflow-state.yaml
+# v2: Added preflight, gates, fallback tracking, interface contract
 
 workflow:
   feature: "{feature_name}"
   started: "{ISO timestamp}"
-  status: discovery|planning|building|verification|fix_loop|complete
+  status: preflight|discovery|planning|building|verification|fix_loop|complete
   base_commit: "{git SHA before changes}"
   complexity: simple|medium|complex|mega
 
+# ── v2: Pre-flight Checks ─────────────────────────────────
+preflight:
+  status: pending|passed|degraded  # degraded = some checks failed, fallback established
+  checks:
+    delegate_task: true|false
+    claude_cli: true|false
+    git_clean: true|false
+  fallback_plan:
+    explorer_engine: "delegate_task|claude-acp|orchestrator-self"
+    architect_engine: "delegate_task|claude-acp|orchestrator-self"
+    coder_engine: "claude-cli|delegate_task|orchestrator-self"
+    tester_engine: "claude-cli|delegate_task|orchestrator-self"
+    reviewer_engine: "delegate_task|claude-acp|orchestrator-self"
+
+# ── v2: Gate Status ────────────────────────────────────────
+gates:
+  gate0_preflight:
+    status: pending|passed|failed
+    passed_at: ""
+  gate1_discovery_to_planning:
+    status: pending|passed|failed
+    checks:
+      explorer_report_exists: false
+      covers_structure: false
+      covers_tech_stack: false
+      covers_relevant_code: false
+    passed_at: ""
+  gate2_planning_to_building:
+    status: pending|passed|failed
+    checks:
+      architecture_yaml_exists: false
+      plan_md_exists: false
+      interface_contract_generated: false
+      user_approved: false
+    user_response: ""  # "Approve and proceed" | "Modify plan" | "Cancel"
+    passed_at: ""
+  gate3_building_to_complete:
+    status: pending|passed|failed
+    checks:
+      tester_ran: false
+      reviewer_ran: false
+      critical_issues_fixed: false
+      final_tests_pass: false
+    passed_at: ""
+
 phase1_discovery:
   status: pending|running|complete
+  engine_used: "delegate_task|claude-acp|orchestrator-self"  # v2: track actual engine
   explorers:
     structure:
       status: pending|running|complete|failed
+      engine: ""  # v2: which engine was actually used
       output_summary: ""
     feature:
       status: pending|running|complete|failed
+      engine: ""
       output_summary: ""
     test:
       status: pending|running|complete|failed
+      engine: ""
       output_summary: ""
   merged_discovery: ""  # path to merged report or inline summary
 
 phase2_planning:
   status: pending|running|complete|user_review
+  engine_used: ""
   architecture_file: "docs/plans/architecture.yaml"
   plan_file: "docs/plans/plan.md"
+  interface_contract_file: "docs/plans/interface-contract.yaml"  # v2: new artifact
   total_tasks: 0
   parallel_groups: 0
   user_approved: false
@@ -34,15 +86,18 @@ phase2_planning:
 phase3_building:
   status: pending|running|complete
   current_group: 0
+  integration_build_passed: false  # v2: post-parallel-merge build check
   groups:
     - group_id: 1
       tasks:
         - id: "task-1"
           title: ""
           coder: "claude-code"
+          engine_used: ""  # v2: actual engine (claude-cli|delegate_task|orchestrator)
           status: pending|running|complete|failed
           commits: []
           issues: []
+          cross_coder_deps: []  # v2: dependencies on other coders' files
       status: pending|running|complete
     - group_id: 2
       tasks: []
@@ -52,20 +107,24 @@ phase4_verification:
   status: pending|running|complete
   tester:
     status: pending|running|complete
+    engine_used: ""
     tests_added: 0
     all_passing: false
     coverage: ""
   reviewers:
     bug_hunter:
       status: pending|running|complete
+      engine_used: ""
       issues_raw: 0
       issues_filtered: 0  # after confidence >= 80
     security:
       status: pending|running|complete
+      engine_used: ""
       issues_raw: 0
       issues_filtered: 0
     architecture:
       status: pending|running|complete
+      engine_used: ""
       issues_raw: 0
       issues_filtered: 0
   aggregated_issues:
@@ -83,9 +142,11 @@ fix_loop:
       issues_sent: 0
       issues_fixed: 0
       issues_remaining: 0
+      engine_used: ""  # v2
 
 result:
   status: success|partial|failed
+  degraded_phases: []  # v2: list of phases that used fallback engines
   files_created: []
   files_modified: []
   tests_added: 0

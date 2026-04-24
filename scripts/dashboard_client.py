@@ -161,12 +161,13 @@ class Dashboard:
     def phase_progress(self, phase: str, progress: int):
         self.send_event("phase.progress", {"phase": phase, "progress": progress})
 
-    def agent_spawn(self, agent_id: str, role: str, phase: str, max_iterations: int = 50):
+    def agent_spawn(self, agent_id: str, role: str, phase: str, max_iterations: int = 50, engine: str = ""):
         self.send_event("agent.spawn", {
             "agent_id": agent_id,
             "role": role,
             "phase": phase,
             "max_iterations": max_iterations,
+            "engine": engine,  # v2: track which engine (delegate_task, claude-cli, claude-acp, orchestrator-self)
         })
 
     def agent_tool_call(self, agent_id: str, tool: str, args: str = "", iteration: int = 0):
@@ -190,6 +191,53 @@ class Dashboard:
         self.send_event("agent.error", {
             "agent_id": agent_id,
             "error": error,
+        })
+
+    # ── v2: Pre-flight, Gate, and Fallback events ────────────
+
+    def preflight_start(self):
+        """Emit when pre-flight checks begin."""
+        self.send_event("preflight.start", {})
+
+    def preflight_check(self, check_name: str, passed: bool, detail: str = ""):
+        """Emit per-check result during pre-flight."""
+        self.send_event("preflight.check", {
+            "check": check_name,
+            "passed": passed,
+            "detail": detail,
+        })
+
+    def preflight_complete(self, status: str, fallback_plan: dict = None):
+        """Emit when pre-flight finishes. status: passed|degraded|failed."""
+        self.send_event("preflight.complete", {
+            "status": status,
+            "fallback_plan": fallback_plan or {},
+        })
+
+    def gate_check(self, gate_id: str, status: str, checks: dict = None, detail: str = ""):
+        """Emit gate validation result. gate_id: gate0..gate3, status: passed|failed."""
+        self.send_event("gate.check", {
+            "gate_id": gate_id,
+            "status": status,
+            "checks": checks or {},
+            "detail": detail,
+        })
+
+    def fallback_triggered(self, role: str, primary_engine: str, fallback_engine: str, reason: str = ""):
+        """Emit when a role falls back to a degraded engine."""
+        self.send_event("fallback.triggered", {
+            "role": role,
+            "primary_engine": primary_engine,
+            "fallback_engine": fallback_engine,
+            "reason": reason,
+        })
+
+    def integration_build(self, group_id: int, passed: bool, output: str = ""):
+        """Emit after post-parallel-merge build check."""
+        self.send_event("build.integration", {
+            "group_id": group_id,
+            "passed": passed,
+            "output": output[:500] if output else "",  # truncate long build output
         })
 
     def metrics_update(self, **kwargs):
